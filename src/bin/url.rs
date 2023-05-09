@@ -2,7 +2,6 @@ use std::{env, time::Duration};
 
 use anyhow::{anyhow, Context};
 use reqwest::Client;
-use vods::first_ok;
 
 fn main() -> anyhow::Result<()> {
     let port = env::args()
@@ -17,10 +16,7 @@ fn main() -> anyhow::Result<()> {
             .timeout(Duration::from_secs(5))
             .trust_dns(true)
             .build()?;
-        let items = (2..=255)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .map(move |elem| (elem, Client::clone(&client)));
+        let items = (2..=255u8).map(move |elem| (elem, Client::clone(&client)));
         let url = first_ok::get_first_ok_bounded(items, 0, move |(item, client)| async move {
             let url = format!("http://192.168.1.{}:{}", item, port);
             let response = client.get(&url).send().await?;

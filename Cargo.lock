@@ -383,6 +383,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "first-ok"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98f42ea30532826a736241527949ad613cd8d0331f4b155b0a805db6b9fd40b9"
+dependencies = [
+ "async-channel",
+ "futures",
+ "tokio",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1606,6 +1617,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "first-ok",
  "futures",
  "hex",
  "m3u8-rs",

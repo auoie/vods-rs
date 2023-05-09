@@ -1,7 +1,11 @@
-pub mod streamscharts;
-pub mod sullygnome;
+mod streamscharts;
+mod sullygnome;
+mod twitchtracker;
+pub use streamscharts::*;
+pub use sullygnome::*;
+pub use twitchtracker::*;
+
 mod tests;
-pub mod twitchtracker;
 
 use anyhow::{anyhow, Context};
 use bytes::{Buf, Bytes};
@@ -18,8 +22,6 @@ use std::{
 };
 use tokio::sync::mpsc;
 use url::Url;
-
-use crate::first_ok;
 
 pub const DOMAINS: [&str; 12] = [
     "https://vod-secure.twitch.tv/",

@@ -4,9 +4,9 @@ use anyhow::anyhow;
 use clap::{Args, Parser, Subcommand};
 use m3u8_rs::MediaPlaylist;
 use reqwest::Client;
-use vods::parse::{
-    self, streamscharts::StreamsChartsData, sullygnome::SullyGnomeData,
-    twitchtracker::TwitchTrackerData, DomainWithPath, ValidDwpResponse, VideoData,
+use vods::{
+    self, DomainWithPath, StreamsChartsData, SullyGnomeData, TwitchTrackerData, ValidDwpResponse,
+    VideoData,
 };
 
 #[derive(Parser)]
@@ -96,7 +96,7 @@ fn write_media_playlist<T: Clone + 'static + Send + Display>(
         .iter(),
     );
     fs::create_dir_all(&path)?;
-    let rounded_duration = parse::get_media_playlist_duration(mediapl);
+    let rounded_duration = vods::get_media_playlist_duration(mediapl);
     path.push(format!(
         "{}_{}.m3u8",
         video_data,
@@ -121,12 +121,12 @@ async fn get_valid_dwp(
     client: Client,
 ) -> anyhow::Result<ValidDwpResponse<&'static str>> {
     let domain_with_paths_list = video_data.get_domain_with_paths_list(domains, seconds, true);
-    let dwp_and_body = parse::get_first_valid_dwp(domain_with_paths_list, client.clone()).await;
+    let dwp_and_body = vods::get_first_valid_dwp(domain_with_paths_list, client.clone()).await;
     if let Some(Ok(dwp_and_body)) = dwp_and_body {
         return Ok(dwp_and_body);
     }
     let domain_with_paths_list = video_data.get_domain_with_paths_list(domains, seconds, false);
-    let dwp_and_body = parse::get_first_valid_dwp(domain_with_paths_list, client).await;
+    let dwp_and_body = vods::get_first_valid_dwp(domain_with_paths_list, client).await;
     match dwp_and_body {
         Some(dwp_and_body) => dwp_and_body,
         None => Err(anyhow!("no domains supplied")),
@@ -141,15 +141,15 @@ async fn main_helper(
     let video_data = video_data.with_offset(-1); // some m3u8 file names use a time that is 1 second minus the provided time
     let client = make_robust_client()?;
     let dwp_and_body =
-        get_valid_dwp(&parse::DOMAINS, seconds + 1, video_data, client.clone()).await?;
+        get_valid_dwp(&vods::DOMAINS, seconds + 1, video_data, client.clone()).await?;
     println!("Found valid url {}", dwp_and_body.dwp.get_index_dvr_url());
-    let mut mediapl = parse::decode_media_playlist_filter_nil_segments(dwp_and_body.body)?;
-    parse::mute_media_segments(&mut mediapl);
+    let mut mediapl = vods::decode_media_playlist_filter_nil_segments(dwp_and_body.body)?;
+    vods::mute_media_segments(&mut mediapl);
     dwp_and_body.dwp.make_paths_explicit(&mut mediapl);
     match filter_invalid {
         Some(check_invalid_concurrent) if check_invalid_concurrent > 0 => {
             let num_total_segments = mediapl.segments.len();
-            mediapl = parse::get_media_playlist_with_valid_segments(
+            mediapl = vods::get_media_playlist_with_valid_segments(
                 mediapl,
                 check_invalid_concurrent,
                 client,
