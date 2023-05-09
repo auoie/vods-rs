@@ -1,5 +1,3 @@
-use std::sync::{Arc, Mutex};
-
 use futures::Future;
 use tokio::{select, sync::mpsc};
 
@@ -82,25 +80,13 @@ where
     if concurrent == 0 {
         concurrent = length;
     }
-    let (item_sender, item_receiver) = async_channel::bounded::<I>(1);
-    let (response_sender, response_receiver) = mpsc::channel::<Result<T, E>>(1);
-    let count = Arc::new(Mutex::new(0));
+    let (item_sender, item_receiver) = async_channel::bounded::<I>(16);
+    let (response_sender, response_receiver) = mpsc::channel::<Result<T, E>>(16);
     for _ in 0..concurrent {
         let item_receiver = item_receiver.clone();
         let response_sender = response_sender.clone();
-        let count = count.clone();
         tokio::task::spawn(async move {
-            // {
-            //     let mut locked = count.lock().unwrap();
-            //     *locked += 1;
-            //     println!("started {}", locked);
-            // }
             process_item_requests(item_receiver, checker, response_sender).await;
-            {
-                let mut locked = count.lock().unwrap();
-                *locked += 1;
-                println!("started {}", locked);
-            }
         });
     }
     tokio::task::spawn(async move {

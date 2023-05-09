@@ -13,7 +13,10 @@ fn main() -> anyhow::Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .trust_dns(true)
+            .build()?;
         let items = (2..=255)
             .collect::<Vec<_>>()
             .into_iter()

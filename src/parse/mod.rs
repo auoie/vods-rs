@@ -10,7 +10,12 @@ use futures::Future;
 use m3u8_rs::{MediaPlaylist, MediaSegment};
 use reqwest::Client;
 use sha1::{Digest, Sha1};
-use std::{fmt::Display, sync::Arc, time::Duration};
+use std::{
+    fmt::Display,
+    io::{stdout, Write},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::mpsc;
 use url::Url;
 
@@ -319,8 +324,6 @@ pub fn get_media_playlist_duration(playlist: &MediaPlaylist) -> Duration {
     Duration::from_secs_f64(duration)
 }
 
-static CLEAR_LINE: &str = "\x1b[2K";
-
 pub async fn get_media_playlist_with_valid_segments(
     mut raw_playlist: MediaPlaylist,
     concurrent: usize,
@@ -346,6 +349,8 @@ async fn get_valid_segments(
         .filter_map(|(i, elem)| if index_is_valid[i] { Some(elem) } else { None })
         .collect()
 }
+
+static CLEAR_LINE: &str = "\x1b[2K";
 
 async fn get_valid_indices(urls: Vec<String>, concurrent: usize, client: Client) -> Vec<bool> {
     let urls = Arc::new(urls);
@@ -389,6 +394,7 @@ async fn get_valid_indices(urls: Vec<String>, concurrent: usize, client: Client)
             print!("{}", CLEAR_LINE);
             print!("\r");
             print!("Processed {} segments out of {}", done_count, urls.len());
+            let _ = stdout().flush();
             if let Some(index) = response {
                 result[index] = true;
             }

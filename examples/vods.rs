@@ -1,20 +1,12 @@
-use std::{
-    fmt::Display,
-    fs,
-    io::{BufWriter, Write},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{fmt::Display, fs, io::BufWriter, path::PathBuf, time::Duration};
 
 use anyhow::anyhow;
 use clap::{Args, Parser, Subcommand};
 use m3u8_rs::MediaPlaylist;
 use reqwest::Client;
-use vods::vods::{
-    decode_media_playlist_filter_nil_segments, get_first_valid_dwp, get_media_playlist_duration,
-    get_media_playlist_with_valid_segments, mute_media_segments, streamscharts::StreamsChartsData,
-    sullygnome::SullyGnomeData, twitchtracker::TwitchTrackerData, DomainWithPath, ValidDwpResponse,
-    VideoData, DOMAINS,
+use vods::parse::{
+    self, streamscharts::StreamsChartsData, sullygnome::SullyGnomeData,
+    twitchtracker::TwitchTrackerData, DomainWithPath, ValidDwpResponse, VideoData,
 };
 
 #[derive(Parser)]
@@ -84,6 +76,13 @@ struct SullyGnomeArgs {
     filter_invalid: Option<usize>,
 }
 
+fn duration_to_human_readable(dur: &Duration) -> String {
+    let secs = dur.as_secs() % 60;
+    let minutes = (dur.as_secs() / 60) % 60;
+    let hours = (dur.as_secs() / 60) / 60;
+    format!("{:0>2}h{:0>2}m{:0>2}s", hours, minutes, secs)
+}
+
 fn write_media_playlist<T: Clone + 'static + Send + Display>(
     mediapl: &MediaPlaylist,
     dwp: DomainWithPath<T>,
@@ -97,16 +96,22 @@ fn write_media_playlist<T: Clone + 'static + Send + Display>(
         .iter(),
     );
     fs::create_dir_all(&path)?;
-    let rounded_duration = get_media_playlist_duration(mediapl);
-    path.push(format!("{}_{:?}.m3u8", video_data, rounded_duration));
+    let rounded_duration = parse::get_media_playlist_duration(mediapl);
+    path.push(format!(
+        "{}_{}.m3u8",
+        video_data,
+        duration_to_human_readable(&rounded_duration)
+    ));
     let mut file_path = BufWriter::new(fs::File::create(&path)?);
     mediapl.write_to(&mut file_path)?;
-    file_path.flush()?;
     Ok(())
 }
 
 fn make_robust_client() -> Result<Client, reqwest::Error> {
-    Client::builder().timeout(Duration::from_secs(10)).build()
+    Client::builder()
+        .timeout(Duration::from_secs(10))
+        .trust_dns(true)
+        .build()
 }
 
 async fn get_valid_dwp(
@@ -116,12 +121,12 @@ async fn get_valid_dwp(
     client: Client,
 ) -> anyhow::Result<ValidDwpResponse<&'static str>> {
     let domain_with_paths_list = video_data.get_domain_with_paths_list(domains, seconds, true);
-    let dwp_and_body = get_first_valid_dwp(domain_with_paths_list, client.clone()).await;
+    let dwp_and_body = parse::get_first_valid_dwp(domain_with_paths_list, client.clone()).await;
     if let Some(Ok(dwp_and_body)) = dwp_and_body {
         return Ok(dwp_and_body);
     }
     let domain_with_paths_list = video_data.get_domain_with_paths_list(domains, seconds, false);
-    let dwp_and_body = get_first_valid_dwp(domain_with_paths_list, client).await;
+    let dwp_and_body = parse::get_first_valid_dwp(domain_with_paths_list, client).await;
     match dwp_and_body {
         Some(dwp_and_body) => dwp_and_body,
         None => Err(anyhow!("no domains supplied")),
@@ -135,17 +140,21 @@ async fn main_helper(
 ) -> anyhow::Result<()> {
     let video_data = video_data.with_offset(-1); // some m3u8 file names use a time that is 1 second minus the provided time
     let client = make_robust_client()?;
-    let dwp_and_body = get_valid_dwp(&DOMAINS, seconds + 1, video_data, client.clone()).await?;
+    let dwp_and_body =
+        get_valid_dwp(&parse::DOMAINS, seconds + 1, video_data, client.clone()).await?;
     println!("Found valid url {}", dwp_and_body.dwp.get_index_dvr_url());
-    let mut mediapl = decode_media_playlist_filter_nil_segments(dwp_and_body.body)?;
-    mute_media_segments(&mut mediapl);
+    let mut mediapl = parse::decode_media_playlist_filter_nil_segments(dwp_and_body.body)?;
+    parse::mute_media_segments(&mut mediapl);
     dwp_and_body.dwp.make_paths_explicit(&mut mediapl);
     match filter_invalid {
         Some(check_invalid_concurrent) if check_invalid_concurrent > 0 => {
             let num_total_segments = mediapl.segments.len();
-            mediapl =
-                get_media_playlist_with_valid_segments(mediapl, check_invalid_concurrent, client)
-                    .await;
+            mediapl = parse::get_media_playlist_with_valid_segments(
+                mediapl,
+                check_invalid_concurrent,
+                client,
+            )
+            .await;
             let num_valid_segments = mediapl.segments.len();
             println!(
                 "{} valid segments out of {}",
@@ -167,7 +176,6 @@ fn main() -> anyhow::Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        console_subscriber::init();
         match cli.command {
             Commands::TwitchTracker(args) => {
                 let twitch_data = TwitchTrackerData {
@@ -197,7 +205,6 @@ fn main() -> anyhow::Result<()> {
                 main_helper(1, video_data, args.filter_invalid).await?;
             }
         }
-        println!("hello world");
         Ok(())
     })
 }
