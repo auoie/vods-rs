@@ -7,11 +7,11 @@ then it is impossible to recover a VOD.
 
 ## Building
 
-Build and run the binary. For example, `cargo run --release --bin vods {stuff}`.
+Build and run the binary. For example, `cargo run --release {stuff}`.
 Alternatively,
 
 ```bash
-cargo build --release --bin vods # Make the binary
+cargo build --release # Make the binary
 ./target/release/vods --help # View help
 ./target/release/vods sg-manual-get-m3u8 --help # View help for command sg-manual-get-m3u8
 ```
