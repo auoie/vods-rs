@@ -111,6 +111,7 @@ fn make_robust_client() -> Result<Client, reqwest::Error> {
     Client::builder()
         .timeout(Duration::from_secs(10))
         .trust_dns(true)
+        .use_rustls_tls()
         .build()
 }
 

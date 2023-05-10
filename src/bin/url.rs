@@ -15,6 +15,7 @@ fn main() -> anyhow::Result<()> {
         let client = Client::builder()
             .timeout(Duration::from_secs(5))
             .trust_dns(true)
+            .use_rustls_tls()
             .build()?;
         let items = (2..=255u8).map(move |elem| (elem, Client::clone(&client)));
         let url = first_ok::get_first_ok_bounded(items, 0, move |(item, client)| async move {
