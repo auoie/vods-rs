@@ -20,7 +20,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::sync::mpsc;
+use tokio::{select, sync::mpsc};
 use url::Url;
 
 pub const DOMAINS: [&str; 12] = [
@@ -364,17 +364,23 @@ async fn get_valid_indices(urls: Vec<String>, concurrent: usize, client: Client)
         let client = Client::clone(&client);
         let valid_indices_sender = mpsc::Sender::clone(&valid_indices_sender);
         tokio::task::spawn(async move {
-            while let Ok(request_index) = request_indices_receiver.recv().await {
-                let url = &urls[request_index];
-                let client = Client::clone(&client);
-                let result = if url_is_valid(url, client).await {
-                    Some(request_index)
-                } else {
-                    None
-                };
-                if valid_indices_sender.send(result).await.is_err() {
-                    return;
-                };
+            let task = || async {
+                while let Ok(request_index) = request_indices_receiver.recv().await {
+                    let url = &urls[request_index];
+                    let client = Client::clone(&client);
+                    let result = if url_is_valid(url, client).await {
+                        Some(request_index)
+                    } else {
+                        None
+                    };
+                    if valid_indices_sender.send(result).await.is_err() {
+                        return;
+                    };
+                }
+            };
+            select! {
+                _ = task() => {}
+                _ = valid_indices_sender.closed() => {}
             }
         });
     }
