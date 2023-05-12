@@ -109,9 +109,8 @@ fn write_media_playlist<T: Clone + 'static + Send + Display>(
 
 fn make_robust_client() -> Result<Client, reqwest::Error> {
     Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(5))
         .trust_dns(true)
-        .use_rustls_tls()
         .build()
 }
 

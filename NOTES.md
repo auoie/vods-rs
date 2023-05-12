@@ -40,3 +40,12 @@ It seems like it uses `getaddrinfo` internally which is a [blocking call](https:
 See [here](https://github.com/tokio-rs/mio/issues/668) for a GitHub comment.
 
 The solution is to instead use the `trust-dns` async resolver which is a feature in the `reqwest` crate.
+
+## Robust HTTP Client
+
+To test the robustness of the HTTP client, use the `--filter-invalid 100` option and then turn on a VPN while it is running.
+It should pause for the timeout duration and then continue as normal.
+When I use the `.use_rustls_tls()` option, it fails on the intial request and the retry, taking twice as long.
+When I don't use the `rustls` TLS backend, it just times out once and then proceeds as normal.
+
+[This person](https://www.reddit.com/r/rust/comments/oir1g1/comment/h4yn4kw/?utm_source=share&utm_medium=web2x&context=3) suggests that async is the right choice for a server but the wrong choice for a client.

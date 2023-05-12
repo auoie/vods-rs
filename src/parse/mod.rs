@@ -67,14 +67,13 @@ pub struct ValidDwpResponse<T: Clone + 'static + Send + Display> {
 
 async fn retry_on_error<F, T, E, Fut>(doer: F) -> Result<T, E>
 where
-    F: (FnOnce() -> Fut) + Clone,
+    F: (Fn() -> Fut) + Clone,
     Fut: Future<Output = Result<T, E>>,
 {
-    let doer_clone = F::clone(&doer);
     let result = doer().await;
     match result {
         Ok(good) => Ok(good),
-        Err(_) => doer_clone().await,
+        Err(_) => F::clone(&doer)().await,
     }
 }
 
