@@ -49,3 +49,62 @@ When I use the `.use_rustls_tls()` option, it fails on the intial request and th
 When I don't use the `rustls` TLS backend, it just times out once and then proceeds as normal.
 
 [This person](https://www.reddit.com/r/rust/comments/oir1g1/comment/h4yn4kw/?utm_source=share&utm_medium=web2x&context=3) suggests that async is the right choice for a server but the wrong choice for a client.
+
+Upon some further testing, `ureq` with `rustls` doesn't seem to have any problems.
+So I just copied their `rustls::ClientConfig`.
+
+```rust
+fn root_certs() -> rustls::RootCertStore {
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+        rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+            ta.subject,
+            ta.spki,
+            ta.name_constraints,
+        )
+    }));
+    root_store
+}
+
+fn make_tls() -> rustls::ClientConfig {
+    let tls: rustls::ConfigBuilder<
+        rustls::ClientConfig,
+        rustls::client::WantsTransparencyPolicyOrClientCert,
+    > = rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_certs());
+    tls.with_no_client_auth()
+}
+
+fn make_robust_client() -> Result<Client, reqwest::Error> {
+    Client::builder()
+        .timeout(Duration::from_secs(5))
+        .use_preconfigured_tls(make_tls())
+        .trust_dns(true)
+        .build()
+}
+```
+
+Comparing with `reqwest` and doing some tests showed that the main offender seems to be
+
+```
+tls.alpn_protocols = vec!["h2".into(), "http/1.1".into()];
+```
+
+If I add that to my `ClientConfig`, then it continues to fail.
+Any easier solution might just to to use `.use_rustls_tls().http1_only()` since `.use_preconfigured_tls(make_tls())` requires that I keep my `rustls` version that of the `reqwest` crate.
+
+I'm still not sure how to replicate the following in `rust`.
+
+```go
+func makeRobustClient() *http.Client {
+	timeout := 10 * time.Second
+	dialer := &net.Dialer{
+		Timeout: timeout,
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: &http.Transport{DialContext: dialer.DialContext},
+	}
+}
+```

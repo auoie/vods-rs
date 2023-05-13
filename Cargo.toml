@@ -15,7 +15,7 @@ first-ok = "0.1.1"
 futures = "0.3.28"
 hex = "0.4.3"
 m3u8-rs = "5.0.4"
-reqwest = { version = "0.11.17", features = ["trust-dns"] }
+reqwest = { version = "0.11.17", features = ["trust-dns", "rustls-tls"] }
 sha1 = "0.10.5"
 tokio = { version = "1.28.1", features = ["sync", "macros", "rt-multi-thread"] }
 url = "2.3.1"
