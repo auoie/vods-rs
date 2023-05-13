@@ -108,3 +108,27 @@ func makeRobustClient() *http.Client {
 	}
 }
 ```
+
+You could instead do
+
+```rust
+fn make_robust_client() -> Result<Client, reqwest::Error> {
+    Client::builder()
+        .timeout(Duration::from_secs(5))
+        .http2_keep_alive_timeout(Duration::from_millis(500))
+        .http2_keep_alive_interval(Duration::from_millis(250))
+        .http2_keep_alive_while_idle(true)
+        .http2_adaptive_window(true)
+        .use_rustls_tls()
+        // .http2_prior_knowledge()
+        .trust_dns(true)
+        .build()
+}
+```
+
+The method call `.http2_adaptive_window(true)` makes HTTP/2 much faster than HTTP1/1.
+
+It won't stall (but very rarely it still does for some reason).
+But a lot of the segments will fail.
+In order to make them succeed, I needed to add a delay on the `retry_on_error` function.
+In practice, for this particular, binary, the retry function is only called when a VPN is turned on or something with NAT happens.

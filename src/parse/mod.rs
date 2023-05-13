@@ -65,7 +65,7 @@ pub struct ValidDwpResponse<T: Clone + 'static + Send + Display> {
     pub body: Bytes,
 }
 
-async fn retry_on_error<F, T, E, Fut>(doer: F) -> Result<T, E>
+async fn retry_on_error<F, T, E, Fut>(doer: F, milliseconds_retry: u64) -> Result<T, E>
 where
     F: (Fn() -> Fut) + Clone,
     Fut: Future<Output = Result<T, E>>,
@@ -73,7 +73,12 @@ where
     let result = doer().await;
     match result {
         Ok(good) => Ok(good),
-        Err(_) => F::clone(&doer)().await,
+        Err(_) => {
+            if milliseconds_retry > 0 {
+                tokio::time::sleep(Duration::from_millis(milliseconds_retry)).await;
+            }
+            F::clone(&doer)().await
+        }
     }
 }
 
@@ -215,12 +220,18 @@ impl<T: Clone + 'static + Send + Display + Sync> DomainWithPaths<T> {
 
     /// If the list of items is empty, it returns `None`.
     /// If all of the results are errors, it returns the last error.
-    pub async fn get_first_valid_dwp(&self, client: Client) -> anyhow::Result<ValidDwpResponse<T>> {
+    pub async fn get_first_valid_dwp(
+        &self,
+        client: Client,
+        milliseconds_retry: u64,
+    ) -> anyhow::Result<ValidDwpResponse<T>> {
         let mut domain_with_path_list = self.to_list_of_domain_with_path();
         let last = domain_with_path_list.pop().context("no urls")?;
         // establish TCP connection for reuse
         // https://groups.google.com/g/golang-nuts/c/5T5aiDRl_cw/m/zYPGtCOYBwAJ
-        let body = last.get_m3u8_body(Client::clone(&client)).await;
+        let body = last
+            .get_m3u8_body(Client::clone(&client), milliseconds_retry)
+            .await;
         match body {
             Ok(body) => Ok(ValidDwpResponse { dwp: last, body }),
             Err(err) => {
@@ -229,8 +240,8 @@ impl<T: Clone + 'static + Send + Display + Sync> DomainWithPaths<T> {
                     .into_iter()
                     .map(move |item| (item, Client::clone(&client)));
                 let response =
-                    first_ok::get_first_ok_bounded(items, 0, |(item, client)| async move {
-                        let body = item.get_m3u8_body(client).await?;
+                    first_ok::get_first_ok_bounded(items, 0, move |(item, client)| async move {
+                        let body = item.get_m3u8_body(client, milliseconds_retry).await?;
                         Ok(ValidDwpResponse { body, dwp: item })
                     })
                     .await;
@@ -248,13 +259,14 @@ impl<T: Clone + 'static + Send + Display + Sync> DomainWithPaths<T> {
 pub async fn get_first_valid_dwp<T: Clone + 'static + Send + Display + Sync>(
     domain_with_paths_list: Vec<DomainWithPaths<T>>,
     client: Client,
+    milliseconds_retry: u64,
 ) -> Option<anyhow::Result<ValidDwpResponse<T>>> {
     first_ok::get_first_ok_bounded(
         domain_with_paths_list
             .into_iter()
             .map(move |item| (item, Client::clone(&client))),
         0,
-        |(item, client)| async move { item.get_first_valid_dwp(client).await },
+        move |(item, client)| async move { item.get_first_valid_dwp(client, milliseconds_retry).await },
     )
     .await
 }
@@ -287,9 +299,17 @@ impl<T: Clone + 'static + Send + Display> DomainWithPath<T> {
         }
     }
 
-    pub async fn get_m3u8_body(&self, client: Client) -> anyhow::Result<Bytes> {
+    pub async fn get_m3u8_body(
+        &self,
+        client: Client,
+        milliseconds_retry: u64,
+    ) -> anyhow::Result<Bytes> {
         let url = Arc::new(self.get_index_dvr_url());
-        let response = retry_on_error(|| async { client.get(url.as_ref()).send().await }).await?;
+        let response = retry_on_error(
+            || async { client.get(url.as_ref()).send().await },
+            milliseconds_retry,
+        )
+        .await?;
         let status_code = response.status().as_u16();
         if status_code != 200 {
             return Err(anyhow!(format!("status code is {}", status_code)));
@@ -329,8 +349,15 @@ pub async fn get_media_playlist_with_valid_segments(
     mut raw_playlist: MediaPlaylist,
     concurrent: usize,
     client: Client,
+    milliseconds_retry: u64,
 ) -> MediaPlaylist {
-    raw_playlist.segments = get_valid_segments(raw_playlist.segments, concurrent, client).await;
+    raw_playlist.segments = get_valid_segments(
+        raw_playlist.segments,
+        concurrent,
+        client,
+        milliseconds_retry,
+    )
+    .await;
     raw_playlist
 }
 
@@ -338,12 +365,13 @@ async fn get_valid_segments(
     segments: Vec<MediaSegment>,
     concurrent: usize,
     client: Client,
+    milliseconds_retry: u64,
 ) -> Vec<MediaSegment> {
     let urls = segments
         .iter()
         .map(|segment| String::clone(&segment.uri))
         .collect::<Vec<_>>();
-    let index_is_valid = get_valid_indices(urls, concurrent, client).await;
+    let index_is_valid = get_valid_indices(urls, concurrent, client, milliseconds_retry).await;
     segments
         .into_iter()
         .enumerate()
@@ -353,7 +381,12 @@ async fn get_valid_segments(
 
 static CLEAR_LINE: &str = "\x1b[2K";
 
-async fn get_valid_indices(urls: Vec<String>, concurrent: usize, client: Client) -> Vec<bool> {
+async fn get_valid_indices(
+    urls: Vec<String>,
+    concurrent: usize,
+    client: Client,
+    milliseconds_retry: u64,
+) -> Vec<bool> {
     let urls = Arc::new(urls);
     let (valid_indices_sender, mut valid_indices_receiver) = mpsc::channel::<Option<usize>>(1);
     let (request_indices_sender, request_indices_receiver) = async_channel::bounded::<usize>(1);
@@ -367,7 +400,7 @@ async fn get_valid_indices(urls: Vec<String>, concurrent: usize, client: Client)
                 while let Ok(request_index) = request_indices_receiver.recv().await {
                     let url = &urls[request_index];
                     let client = Client::clone(&client);
-                    let result = if url_is_valid(url, client).await {
+                    let result = if url_is_valid(url, client, milliseconds_retry).await {
                         Some(request_index)
                     } else {
                         None
@@ -411,8 +444,12 @@ async fn get_valid_indices(urls: Vec<String>, concurrent: usize, client: Client)
     result
 }
 
-async fn url_is_valid(url: &String, client: Client) -> bool {
-    let response = retry_on_error(|| async { client.get(url).send().await }).await;
+async fn url_is_valid(url: &String, client: Client, milliseconds_retry: u64) -> bool {
+    let response = retry_on_error(
+        || async { client.get(url).send().await },
+        milliseconds_retry,
+    )
+    .await;
     match response {
         Ok(response) => response.status().as_u16() == 200,
         Err(_) => false,

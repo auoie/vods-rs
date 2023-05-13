@@ -41,7 +41,7 @@ struct TwitchTrackerArgs {
     time: String,
     /// Filter out all of the invalid segments in the m3u8 file with concurrency level
     #[arg(long)]
-    filter_invalid: Option<usize>,
+    filter_invalid: bool,
 }
 
 #[derive(Args, Clone)]
@@ -57,7 +57,7 @@ struct StreamsChartsArgs {
     time: String,
     /// Filter out all of the invalid segments in the m3u8 file with concurrency level
     #[arg(long)]
-    filter_invalid: Option<usize>,
+    filter_invalid: bool,
 }
 
 #[derive(Args, Clone)]
@@ -71,9 +71,9 @@ struct SullyGnomeArgs {
     /// stream UTC start time in the format '2006-01-02T15:04:05Z' (year-month-dayThour:minute:secondZ)
     #[arg(long)]
     time: String,
-    /// Filter out all of the invalid segments in the m3u8 file with concurrency level
+    /// Filter out all of the invalid segments in the m3u8 file
     #[arg(long)]
-    filter_invalid: Option<usize>,
+    filter_invalid: bool,
 }
 
 fn duration_to_human_readable(dur: &Duration) -> String {
@@ -107,11 +107,18 @@ fn write_media_playlist<T: Clone + 'static + Send + Display>(
     Ok(())
 }
 
-fn make_robust_client() -> Result<Client, reqwest::Error> {
+fn make_robust_client(config: &Config) -> Result<Client, reqwest::Error> {
     Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_millis(config.client_timeout_milliseconds))
+        .http2_keep_alive_timeout(Duration::from_millis(
+            config.http2_keep_alive_timeout_milliseconds,
+        ))
+        .http2_keep_alive_interval(Duration::from_millis(
+            config.http2_keep_alive_interval_milliseconds,
+        ))
+        .http2_keep_alive_while_idle(true)
+        .http2_adaptive_window(true)
         .use_rustls_tls()
-        .http1_only()
         .trust_dns(true)
         .build()
 }
@@ -121,14 +128,17 @@ async fn get_valid_dwp(
     seconds: i64,
     video_data: VideoData,
     client: Client,
+    milliseconds_retry: u64,
 ) -> anyhow::Result<ValidDwpResponse<&'static str>> {
     let domain_with_paths_list = video_data.get_domain_with_paths_list(domains, seconds, true);
-    let dwp_and_body = vods::get_first_valid_dwp(domain_with_paths_list, client.clone()).await;
+    let dwp_and_body =
+        vods::get_first_valid_dwp(domain_with_paths_list, client.clone(), milliseconds_retry).await;
     if let Some(Ok(dwp_and_body)) = dwp_and_body {
         return Ok(dwp_and_body);
     }
     let domain_with_paths_list = video_data.get_domain_with_paths_list(domains, seconds, false);
-    let dwp_and_body = vods::get_first_valid_dwp(domain_with_paths_list, client).await;
+    let dwp_and_body =
+        vods::get_first_valid_dwp(domain_with_paths_list, client, milliseconds_retry).await;
     match dwp_and_body {
         Some(dwp_and_body) => dwp_and_body,
         None => Err(anyhow!("no domains supplied")),
@@ -138,38 +148,51 @@ async fn get_valid_dwp(
 async fn main_helper(
     seconds: i64,
     video_data: VideoData,
-    filter_invalid: Option<usize>,
+    filter_invalid: bool,
+    config: &Config,
 ) -> anyhow::Result<()> {
     let video_data = video_data.with_offset(-1); // some m3u8 file names use a time that is 1 second minus the provided time
-    let client = make_robust_client()?;
-    let dwp_and_body =
-        get_valid_dwp(&vods::DOMAINS, seconds + 1, video_data, client.clone()).await?;
+    let client = make_robust_client(config)?;
+    let dwp_and_body = get_valid_dwp(
+        &vods::DOMAINS,
+        seconds + 1,
+        video_data,
+        client.clone(),
+        config.milliseconds_retry,
+    )
+    .await?;
     println!("Found valid url {}", dwp_and_body.dwp.get_index_dvr_url());
     let mut mediapl = vods::decode_media_playlist_filter_nil_segments(dwp_and_body.body)?;
     vods::mute_media_segments(&mut mediapl);
     dwp_and_body.dwp.make_paths_explicit(&mut mediapl);
-    match filter_invalid {
-        Some(check_invalid_concurrent) if check_invalid_concurrent > 0 => {
-            let num_total_segments = mediapl.segments.len();
-            mediapl = vods::get_media_playlist_with_valid_segments(
-                mediapl,
-                check_invalid_concurrent,
-                client,
-            )
-            .await;
-            let num_valid_segments = mediapl.segments.len();
-            println!(
-                "{} valid segments out of {}",
-                num_valid_segments, num_total_segments
-            );
-            if num_valid_segments == 0 {
-                return Err(anyhow!("0 valid segments found"));
-            }
+    if filter_invalid {
+        let num_total_segments = mediapl.segments.len();
+        mediapl = vods::get_media_playlist_with_valid_segments(
+            mediapl,
+            config.concurrent_filter_invalid,
+            client,
+            config.milliseconds_retry,
+        )
+        .await;
+        let num_valid_segments = mediapl.segments.len();
+        println!(
+            "{} valid segments out of {}",
+            num_valid_segments, num_total_segments
+        );
+        if num_valid_segments == 0 {
+            return Err(anyhow!("0 valid segments found"));
         }
-        _ => {}
-    };
+    }
     write_media_playlist(&mediapl, dwp_and_body.dwp)?;
     Ok(())
+}
+
+struct Config {
+    concurrent_filter_invalid: usize,
+    client_timeout_milliseconds: u64,
+    milliseconds_retry: u64,
+    http2_keep_alive_timeout_milliseconds: u64,
+    http2_keep_alive_interval_milliseconds: u64,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -177,6 +200,13 @@ fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
+    let config: Config = Config {
+        concurrent_filter_invalid: 100,
+        client_timeout_milliseconds: 5000,
+        milliseconds_retry: 2000,
+        http2_keep_alive_timeout_milliseconds: 1000,
+        http2_keep_alive_interval_milliseconds: 500,
+    };
     runtime.block_on(async {
         match cli.command {
             Commands::TwitchTracker(args) => {
@@ -186,7 +216,7 @@ fn main() -> anyhow::Result<()> {
                     video_id: args.video_id,
                 };
                 let video_data: VideoData = twitch_data.try_into()?;
-                main_helper(1, video_data, args.filter_invalid).await?;
+                main_helper(1, video_data, args.filter_invalid, &config).await?;
             }
             Commands::StreamsCharts(args) => {
                 let sc_data = StreamsChartsData {
@@ -195,7 +225,7 @@ fn main() -> anyhow::Result<()> {
                     video_id: args.video_id,
                 };
                 let video_data: VideoData = sc_data.try_into()?;
-                main_helper(60, video_data, args.filter_invalid).await?;
+                main_helper(60, video_data, args.filter_invalid, &config).await?;
             }
             Commands::SullyGnome(args) => {
                 let twitch_data = SullyGnomeData {
@@ -204,7 +234,7 @@ fn main() -> anyhow::Result<()> {
                     video_id: args.video_id,
                 };
                 let video_data: VideoData = twitch_data.try_into()?;
-                main_helper(1, video_data, args.filter_invalid).await?;
+                main_helper(1, video_data, args.filter_invalid, &config).await?;
             }
         }
         Ok(())
